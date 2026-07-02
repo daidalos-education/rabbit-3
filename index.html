@@ -1,0 +1,999 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Bunny Roof Runner 3D - Multi-Jump, Coins & Magnet</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+        }
+        body {
+            background: #050510;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            color: white;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .coin-text {
+            color: #ffd700;
+            text-shadow: 0 0 8px rgba(255,215,0,0.6);
+        }
+        .highscore-text {
+            font-size: 16px;
+            color: #aaa;
+            margin-top: 2px;
+        }
+        .highcoins-text {
+            font-size: 16px;
+            color: #ccb23d;
+            margin-top: -2px;
+            text-shadow: 0 0 4px rgba(255,215,0,0.3);
+        }
+        #carrotTimer, #magnetTimer {
+            font-size: 18px;
+            text-shadow: 0 0 6px rgba(255,170,68,0.6);
+            font-weight: bold;
+            display: none;
+        }
+        #carrotTimer { color: #ffaa44; }
+        #magnetTimer { color: #44aaff; text-shadow: 0 0 6px rgba(68,170,255,0.6); }
+        #gameOverScreen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(10, 5, 20, 0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 20;
+            display: none;
+        }
+        h1 {
+            font-size: 48px;
+            color: #ffb6c1;
+            margin-bottom: 10px;
+            text-shadow: 0 0 10px rgba(255,182,193,0.5);
+            text-align: center;
+        }
+        button {
+            padding: 12px 30px;
+            font-size: 20px;
+            background: #ffb6c1;
+            color: #111;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+            margin-top: 20px;
+            border-radius: 25px;
+            transition: transform 0.2s, background 0.2s;
+        }
+        button:hover {
+            background: #ff94a5;
+            transform: scale(1.05);
+        }
+        .instructions {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            text-align: center;
+            font-size: 14px;
+            color: #aaa;
+            z-index: 10;
+            text-shadow: 1px 1px 2px #000;
+            padding: 0 10px;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="ui">
+        <div>PUNTOS: <span id="score">0</span></div>
+        <div class="highscore-text">RÉCORD PUNTOS: <span id="highScore">0</span></div>
+        <div class="coin-text">MONEDAS: <span id="coins">0</span></div>
+        <div class="highcoins-text">RÉCORD MONEDAS: <span id="highCoins">0</span></div>
+        <div id="carrotTimer">¡SÚPER CONEJO!: <span id="carrotSecs">4.0</span>s</div>
+        <div id="magnetTimer">¡IMÁN ACTIVO!: <span id="magnetSecs">4.0</span>s</div>
+    </div>
+    
+    <div id="gameOverScreen">
+        <h1>¡FIN DE LA PARTIDA!</h1>
+        <p>Te has caído de los tejados de la ciudad.</p>
+        <button id="btnRetry">Volver a intentar</button>
+    </div>
+
+    <div class="instructions">
+        PC: Flechas / A-D (Mover) | ESPACIO (Saltar)<br>
+        MÓVIL: Deslizar L/R (Mover) | Tocar pantalla (Saltar hasta 3 veces)
+    </div>
+
+<script>
+// --- CONFIGURACIÓN DEL JUEGO ---
+let scene, camera, renderer;
+let player, wheels = [];
+let roofs = [];
+let coinsArray = [];
+let carrotsArray = [];
+let magnetsArray = [];
+let score = 0;
+let coins = 0;
+
+let hasCarrotPower = false;
+let carrotPowerTimeLeft = 0;
+
+let hasMagnetPower = false;
+let magnetPowerTimeLeft = 0;
+
+// --- CICLO DÍA / NOCHE Y SKYLINE ---
+let ambientLight, dirLight, fillLight, sunMoon, starField;
+let skylineGroup;
+let buildingsArray = [];
+let buildingMaterials = [];
+let cycleTime = 0;
+const dayNightCycleDuration = 24; // segundos para un ciclo completo día-noche (más corto y notorio)
+const daySky = new THREE.Color(0x6ec6ff);
+const nightSky = new THREE.Color(0x1b1f3d);
+const dayFog = new THREE.Color(0x8fd3ff);
+const nightFog = new THREE.Color(0x22254a);
+const dayLightColor = new THREE.Color(0xffe8c2);
+const nightLightColor = new THREE.Color(0x8fa0ff);
+const sunColor = new THREE.Color(0xfff0a0);
+const moonColor = new THREE.Color(0xdfe6ff);
+
+// Sistema de aceleración progresiva
+const initialSpeed = 0.25;
+let defaultSpeed = initialSpeed;
+const maxSpeed = 0.65;
+const speedIncrement = 0.00005;
+
+let highScore = localStorage.getItem('bunny_highScore') ? parseInt(localStorage.getItem('bunny_highScore')) : 0;
+let highCoins = localStorage.getItem('bunny_highCoins') ? parseInt(localStorage.getItem('bunny_highCoins')) : 0;
+let isGameOver = false;
+let gameSpeed = defaultSpeed; 
+const laneWidth = 4;
+const lanes = [-laneWidth, 0, laneWidth];
+let currentLane = 1;
+let playerVelocityY = 0;
+let isGrounded = true;
+const gravity = -0.014;
+const baseJumpStrength = 0.30;
+let jumpCount = 0;
+
+const scoreEl = document.getElementById('score');
+const coinsEl = document.getElementById('coins');
+const highScoreEl = document.getElementById('highScore');
+const highCoinsEl = document.getElementById('highCoins');
+const carrotTimerEl = document.getElementById('carrotTimer');
+const carrotSecsEl = document.getElementById('carrotSecs');
+const magnetTimerEl = document.getElementById('magnetTimer');
+const magnetSecsEl = document.getElementById('magnetSecs');
+const gameOverScreen = document.getElementById('gameOverScreen');
+const btnRetry = document.getElementById('btnRetry');
+
+let touchStartX = 0;
+let touchStartY = 0;
+const minSwipeDistance = 30;
+
+// --- SISTEMA DE MÚSICA DE FONDO (Web Audio API) ---
+let audioCtx = null;
+let musicInterval = null;
+let currentStep = 0;
+
+const NOTES = {
+    C4: 261.63, D4: 293.66, E4: 329.63, F4: 349.23, G4: 392.00, A4: 440.00, B4: 493.88,
+    C5: 523.25, D5: 587.33, E5: 659.25, F5: 698.46, G5: 783.99, A5: 880.00, B5: 987.77,
+    C3: 130.81, G3: 196.00, A3: 220.00, F3: 174.61,
+    E6: 1318.51, G6: 1567.98
+};
+const melody = [
+    'E5', 'G5', 'A5', 'C5', 'D5', null, 'G5', 'E5',
+    'A5', 'F5', 'D5', 'B4', 'C5', 'E5', 'G5', null
+];
+const bassline = [
+    'C3', 'C3', 'G3', 'G3', 'A3', 'A3', 'F3', 'F3',
+    'C3', 'C3', 'G3', 'G3', 'A3', 'F3', 'C3', 'G3'
+];
+
+function initAudio() {
+    if (audioCtx) return; 
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const tempo = 150;
+    musicInterval = setInterval(playMusicStep, tempo);
+}
+
+function playTone(freq, type, duration, volume) {
+    if (!audioCtx || isGameOver) return;
+    let osc = audioCtx.createOscillator();
+    let gainNode = audioCtx.createGain();
+
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+
+    gainNode.gain.setValueAtTime(volume, audioCtx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + duration);
+
+    osc.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    osc.start();
+    osc.stop(audioCtx.currentTime + duration);
+}
+
+function playMusicStep() {
+    if (isGameOver) return;
+    let modifier = hasCarrotPower ? 2 : 1;
+    
+    const currentMelodyNote = melody[currentStep % melody.length];
+    if (currentMelodyNote && NOTES[currentMelodyNote]) {
+        playTone(NOTES[currentMelodyNote] * modifier, hasCarrotPower ? 'sawtooth' : 'triangle', 0.25, hasCarrotPower ? 0.08 : 0.15);
+    }
+
+    const currentBassNote = bassline[currentStep % bassline.length];
+    if (currentBassNote && NOTES[currentBassNote]) {
+        playTone(NOTES[currentBassNote] * modifier, 'square', 0.2, 0.08);
+    }
+
+    currentStep++;
+}
+
+// --- INICIALIZACIÓN ---
+function init() {
+    highScoreEl.innerText = highScore;
+    highCoinsEl.innerText = highCoins;
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(nightSky);
+    scene.fog = new THREE.FogExp2(nightFog.getHex(), 0.009);
+    camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 8, 14); 
+    camera.lookAt(0, 1, -15);
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    scene.add(ambientLight);
+    dirLight = new THREE.DirectionalLight(0xffb6c1, 0.5); 
+    dirLight.position.set(10, 20, 10);
+    dirLight.castShadow = true;
+    scene.add(dirLight);
+    fillLight = new THREE.HemisphereLight(0xaabbff, 0x332244, 0.55);
+    scene.add(fillLight);
+
+    createSunMoon();
+    createStars();
+    createSkyline();
+    createBunnyPlayer();
+    initRoofs();
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('mousedown', handleMouseClick);
+    window.addEventListener('touchstart', handleTouchStart, { passive: false });
+    window.addEventListener('touchend', handleTouchEnd, { passive: false });
+    btnRetry.addEventListener('click', (e) => {
+        e.stopPropagation();
+        resetGame();
+    });
+    btnRetry.addEventListener('touchstart', (e) => {
+        e.stopPropagation();
+        resetGame();
+    });
+    window.addEventListener('resize', onWindowResize);
+
+    animate();
+}
+
+// --- SOL / LUNA ---
+function createSunMoon() {
+    const geo = new THREE.SphereGeometry(4, 20, 20);
+    const mat = new THREE.MeshBasicMaterial({ color: sunColor, fog: false });
+    sunMoon = new THREE.Mesh(geo, mat);
+    sunMoon.position.set(0, 40, -220);
+    scene.add(sunMoon);
+}
+
+// --- ESTRELLAS ---
+function createStars() {
+    const starGeo = new THREE.BufferGeometry();
+    const starCount = 400;
+    const positions = new Float32Array(starCount * 3);
+    for (let i = 0; i < starCount; i++) {
+        positions[i * 3] = (Math.random() - 0.5) * 400;
+        positions[i * 3 + 1] = Math.random() * 120 + 20;
+        positions[i * 3 + 2] = -Math.random() * 350 - 30;
+    }
+    starGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 2, transparent: true, opacity: 0, fog: false });
+    starField = new THREE.Points(starGeo, starMat);
+    scene.add(starField);
+}
+
+// --- TEXTURA DE VENTANAS PARA EDIFICIOS ---
+function createWindowTexture(baseColor) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = baseColor;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const cols = 6, rows = 12;
+    const padX = 4, padY = 4;
+    const cellW = canvas.width / cols;
+    const cellH = canvas.height / rows;
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            if (Math.random() > 0.35) {
+                ctx.fillStyle = Math.random() > 0.5 ? '#ffe89a' : '#3a4050';
+                ctx.fillRect(c * cellW + padX / 2, r * cellH + padY / 2, cellW - padX, cellH - padY);
+            }
+        }
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    return tex;
+}
+
+// --- SKYLINE DE EDIFICIOS DE FONDO ---
+function createSkyline() {
+    skylineGroup = new THREE.Group();
+    scene.add(skylineGroup);
+
+    const baseColors = ['#2c2c3a', '#33384a', '#3a2c3a', '#2a3540'];
+    baseColors.forEach(col => {
+        const tex = createWindowTexture(col);
+        const mat = new THREE.MeshStandardMaterial({
+            map: tex,
+            emissiveMap: tex,
+            emissive: new THREE.Color(0xffe89a),
+            emissiveIntensity: 0,
+            roughness: 0.9
+        });
+        buildingMaterials.push(mat);
+    });
+
+    for (let side = -1; side <= 1; side += 2) {
+        for (let i = 0; i < 14; i++) {
+            const zPos = -i * 26 - Math.random() * 10;
+            createBuilding(side, zPos);
+        }
+    }
+}
+
+function createBuilding(side, zPos) {
+    const width = THREE.MathUtils.randFloat(3, 6);
+    const depth = THREE.MathUtils.randFloat(3, 6);
+    const height = THREE.MathUtils.randFloat(8, 32);
+    const x = side * THREE.MathUtils.randFloat(9, 28);
+    const mat = buildingMaterials[Math.floor(Math.random() * buildingMaterials.length)];
+    const geo = new THREE.BoxGeometry(width, height, depth);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(x, -10 + height / 2, zPos);
+    skylineGroup.add(mesh);
+    buildingsArray.push({ mesh, side, width, height, depth });
+}
+
+function recycleBuilding(b) {
+    const laneRoofs = buildingsArray.filter(o => o.side === b.side);
+    let minZ = -20;
+    laneRoofs.forEach(o => {
+        const frontZ = o.mesh.position.z - o.depth / 2;
+        if (frontZ < minZ) minZ = frontZ;
+    });
+    const gap = Math.random() * 8 + 4;
+    const width = THREE.MathUtils.randFloat(3, 6);
+    const depth = THREE.MathUtils.randFloat(3, 6);
+    const height = THREE.MathUtils.randFloat(8, 32);
+    const x = b.side * THREE.MathUtils.randFloat(9, 28);
+    b.mesh.geometry.dispose();
+    b.mesh.geometry = new THREE.BoxGeometry(width, height, depth);
+    b.mesh.material = buildingMaterials[Math.floor(Math.random() * buildingMaterials.length)];
+    b.width = width;
+    b.depth = depth;
+    b.height = height;
+    b.mesh.position.set(x, -10 + height / 2, minZ - gap - depth / 2);
+}
+
+// --- ACTUALIZACIÓN DEL CICLO DÍA/NOCHE ---
+function updateDayNight() {
+    cycleTime += 1 / 60;
+    const phase = (cycleTime % dayNightCycleDuration) / dayNightCycleDuration;
+    const t = (Math.sin(phase * Math.PI * 2 - Math.PI / 2) + 1) / 2; // 0 = noche cerrada, 1 = pleno día
+
+    scene.background.copy(nightSky).lerp(daySky, t);
+    scene.fog.color.copy(nightFog).lerp(dayFog, t);
+
+    ambientLight.intensity = THREE.MathUtils.lerp(0.55, 0.75, t);
+    dirLight.intensity = THREE.MathUtils.lerp(0.45, 0.9, t);
+    dirLight.color.copy(nightLightColor).lerp(dayLightColor, t);
+
+    // Arco del sol/luna
+    const arcAngle = phase * Math.PI * 2;
+    sunMoon.position.x = Math.cos(arcAngle) * 90;
+    sunMoon.position.y = Math.sin(arcAngle) * 70 + 30;
+    sunMoon.material.color.copy(moonColor).lerp(sunColor, t);
+
+    // Ventanas iluminadas y estrellas visibles de noche
+    const nightFactor = 1 - t;
+    buildingMaterials.forEach(mat => {
+        mat.emissiveIntensity = nightFactor * 1.6;
+    });
+    starField.material.opacity = nightFactor;
+}
+
+// --- CREACIÓN DEL PERSONAJE ---
+function createBunnyPlayer() {
+    player = new THREE.Group();
+    const bodyGeo = new THREE.BoxGeometry(1, 1, 1.2);
+    const bunnyMat = new THREE.MeshStandardMaterial({ color: 0xffccd5, roughness: 0.5 });
+    const body = new THREE.Mesh(bodyGeo, bunnyMat);
+    body.position.y = 0.6;
+    body.castShadow = true;
+    player.add(body);
+
+    const headGeo = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+    const head = new THREE.Mesh(headGeo, bunnyMat);
+    head.position.set(0, 1.3, -0.4);
+    head.castShadow = true;
+    player.add(head);
+
+    const earGeo = new THREE.BoxGeometry(0.18, 0.8, 0.1);
+    const leftEar = new THREE.Mesh(earGeo, bunnyMat);
+    leftEar.position.set(-0.25, 1.9, -0.4);
+    player.add(leftEar);
+
+    const rightEar = leftEar.clone();
+    rightEar.position.x = 0.25;
+    player.add(rightEar);
+    const eyeGeo = new THREE.BoxGeometry(0.1, 0.1, 0.1);
+    const eyeMat = new THREE.MeshStandardMaterial({ color: 0x000000 });
+    const leftEye = new THREE.Mesh(eyeGeo, eyeMat);
+    leftEye.position.set(-0.2, 1.4, -0.81);
+    player.add(leftEye);
+
+    const rightEye = leftEye.clone();
+    rightEye.position.x = 0.2;
+    player.add(rightEye);
+    const wheelGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.2, 12);
+    const wheelMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+    const w1 = new THREE.Mesh(wheelGeo, wheelMat);
+    w1.rotation.z = Math.PI / 2;
+    w1.position.set(-0.6, 0.3, -0.4);
+    player.add(w1);
+    wheels.push(w1);
+
+    const w2 = w1.clone();
+    w2.position.x = 0.6;
+    player.add(w2);
+    wheels.push(w2);
+
+    const w3 = w1.clone();
+    w3.position.z = 0.4;
+    player.add(w3);
+    wheels.push(w3);
+
+    const w4 = w2.clone();
+    w4.position.z = 0.4;
+    player.add(w4);
+    wheels.push(w4);
+
+    player.position.set(lanes[currentLane], 0, 0);
+    scene.add(player);
+}
+
+// --- CREACIÓN DE MONEDAS Y OBJETOS ---
+function spawnCoinsOnRoof(laneIndex, zPos, length) {
+    const rand = Math.random();
+    if (rand < 0.12) {
+        spawnCarrot(laneIndex, zPos, length);
+        return; 
+    } else if (rand < 0.22) {
+        spawnMagnet(laneIndex, zPos, length);
+        return;
+    }
+
+    if (Math.random() > 0.7) return;
+    const coinCount = Math.floor(Math.random() * 3) + 3;
+    const coinGeo = new THREE.TorusGeometry(0.4, 0.1, 8, 24);
+    const coinMat = new THREE.MeshStandardMaterial({ 
+        color: 0xffd700, 
+        metalness: 0.8, 
+        roughness: 0.2,
+        emissive: 0x3a2d00
+    });
+    const step = length / (coinCount + 1);
+    for (let i = 1; i <= coinCount; i++) {
+        const coin = new THREE.Mesh(coinGeo, coinMat);
+        const coinZ = zPos + (length / 2) - (i * step);
+        const coinY = Math.random() > 0.5 ? 1.2 : 3.0;
+
+        coin.position.set(lanes[laneIndex], coinY, coinZ);
+        coin.rotation.y = Math.PI / 2;
+        
+        scene.add(coin);
+        coinsArray.push(coin);
+    }
+}
+
+function spawnCarrot(laneIndex, zPos, length) {
+    const carrotGroup = new THREE.Group();
+    const bodyGeo = new THREE.ConeGeometry(0.3, 1.0, 8);
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xff7700, roughness: 0.3 });
+    const body = new THREE.Mesh(bodyGeo, bodyMat);
+    body.rotation.x = Math.PI;
+    carrotGroup.add(body);
+    const leafGeo = new THREE.BoxGeometry(0.1, 0.4, 0.1);
+    const leafMat = new THREE.MeshStandardMaterial({ color: 0x00cc33 });
+    for (let i = 0; i < 3; i++) {
+        const leaf = new THREE.Mesh(leafGeo, leafMat);
+        leaf.position.y = 0.6;
+        leaf.position.x = (i - 1) * 0.15;
+        leaf.rotation.z = (i - 1) * 0.2;
+        carrotGroup.add(leaf);
+    }
+
+    const carrotZ = zPos;
+    const carrotY = 4.2; 
+
+    carrotGroup.position.set(lanes[laneIndex], carrotY, carrotZ);
+    scene.add(carrotGroup);
+    carrotsArray.push(carrotGroup);
+}
+
+function spawnMagnet(laneIndex, zPos, length) {
+    const magnetGroup = new THREE.Group();
+    
+    // Geometría clásica de herradura (2 cilindros/cajas laterales y una base)
+    const magnetMat = new THREE.MeshStandardMaterial({ color: 0xff3333, roughness: 0.4 }); // Rojo dominante
+    const tipMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.3 });   // Puntas plateadas
+    
+    const sideGeo = new THREE.BoxGeometry(0.2, 0.7, 0.2);
+    const baseGeo = new THREE.BoxGeometry(0.6, 0.2, 0.2);
+    const tipGeo = new THREE.BoxGeometry(0.2, 0.15, 0.2);
+    
+    const base = new THREE.Mesh(baseGeo, magnetMat);
+    base.position.y = 0;
+    magnetGroup.add(base);
+    
+    const leftSide = new THREE.Mesh(sideGeo, magnetMat);
+    leftSide.position.set(-0.2, 0.35, 0);
+    magnetGroup.add(leftSide);
+    
+    const rightSide = new THREE.Mesh(sideGeo, magnetMat);
+    rightSide.position.set(0.2, 0.35, 0);
+    magnetGroup.add(rightSide);
+    
+    const leftTip = new THREE.Mesh(tipGeo, tipMat);
+    leftTip.position.set(-0.2, 0.725, 0);
+    magnetGroup.add(leftTip);
+    
+    const rightTip = new THREE.Mesh(tipGeo, tipMat);
+    rightTip.position.set(0.2, 0.725, 0);
+    magnetGroup.add(rightTip);
+    
+    magnetGroup.position.set(lanes[laneIndex], 3.8, zPos);
+    scene.add(magnetGroup);
+    magnetsArray.push(magnetGroup);
+}
+
+// --- LOGÍSTICA DE TEJADOS ---
+function createRoof(laneIndex, zPos, length) {
+    const roofGroup = new THREE.Group();
+    const geo = new THREE.BoxGeometry(3.5, 20, length);
+    const mat = new THREE.MeshStandardMaterial({ color: 0x8b3a3a, roughness: 0.7 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.y = -10; 
+    roofGroup.add(mesh);
+
+    const borderGeo = new THREE.BoxGeometry(3.6, 0.2, length);
+    const borderMat = new THREE.MeshStandardMaterial({ color: 0x5c2424 });
+    const border = new THREE.Mesh(borderGeo, borderMat);
+    border.position.y = 0.01;
+    roofGroup.add(border);
+    roofGroup.position.set(lanes[laneIndex], 0, zPos);
+    scene.add(roofGroup);
+
+    return {
+        mesh: roofGroup,
+        lane: laneIndex,
+        length: length
+    };
+}
+
+function initRoofs() {
+    roofs.forEach(r => scene.remove(r.mesh));
+    roofs = [];
+    coinsArray.forEach(c => scene.remove(c));
+    coinsArray = [];
+    carrotsArray.forEach(c => scene.remove(c));
+    carrotsArray = [];
+    magnetsArray.forEach(m => scene.remove(m));
+    magnetsArray = [];
+    
+    for (let i = 0; i < 3; i++) {
+        roofs.push(createRoof(i, -15, 60));
+    }
+}
+
+// --- MECÁNICA DE ENTRADA / SALTOS MULTIPLES ---
+function executeJump() {
+    if (isGameOver) return;
+    initAudio();
+    if (hasCarrotPower) {
+        playerVelocityY = baseJumpStrength * 0.8;
+        isGrounded = false;
+        playTone(600, 'sine', 0.05, 0.05);
+        return;
+    }
+
+    if (isGrounded) {
+        jumpCount = 1;
+        playerVelocityY = baseJumpStrength;
+        isGrounded = false;
+        playTone(520, 'square', 0.08, 0.05);
+    } else if (jumpCount === 1) {
+        jumpCount = 2;
+        playerVelocityY = baseJumpStrength * 1.45; 
+        playTone(650, 'square', 0.1, 0.05); 
+    } else if (jumpCount === 2) {
+        jumpCount = 3;
+        playerVelocityY = baseJumpStrength * 1.85;
+        playTone(800, 'square', 0.15, 0.05); 
+    }
+}
+
+function handleKeyDown(e) {
+    if (isGameOver) return;
+    initAudio();
+    if ((e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') && currentLane > 0) {
+        currentLane--;
+    }
+    if ((e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') && currentLane < 2) {
+        currentLane++;
+    }
+    if (e.key === ' ') {
+        e.preventDefault();
+        executeJump();
+    }
+}
+
+// --- ACTUALIZACIÓN DE LA LÓGICA ---
+function update() {
+    if (isGameOver) return;
+
+    updateDayNight();
+
+    // Desplazamiento y reciclaje del skyline de fondo (efecto parallax)
+    buildingsArray.forEach(b => {
+        b.mesh.position.z += gameSpeed * 0.6;
+        if (b.mesh.position.z - b.depth / 2 > 25) {
+            recycleBuilding(b);
+        }
+    });
+
+    // Incremento progresivo de velocidad (Solo si no tiene el Power-Up activo)
+    if (!hasCarrotPower) {
+        if (defaultSpeed < maxSpeed) {
+            defaultSpeed += speedIncrement;
+        }
+        gameSpeed = defaultSpeed;
+    }
+
+    if (hasCarrotPower) {
+        carrotPowerTimeLeft -= 1 / 60;
+        if (carrotPowerTimeLeft <= 0) {
+            hasCarrotPower = false;
+            gameSpeed = defaultSpeed; 
+            carrotTimerEl.style.display = 'none';
+        } else {
+            carrotSecsEl.innerText = carrotPowerTimeLeft.toFixed(1);
+            if (player.position.y < 2.5) {
+                player.position.y += (2.5 - player.position.y) * 0.1;
+            }
+        }
+    }
+
+    if (hasMagnetPower) {
+        magnetPowerTimeLeft -= 1 / 60;
+        if (magnetPowerTimeLeft <= 0) {
+            hasMagnetPower = false;
+            magnetTimerEl.style.display = 'none';
+        } else {
+            magnetSecsEl.innerText = magnetPowerTimeLeft.toFixed(1);
+        }
+    }
+
+    score += hasCarrotPower ? 2 : 1; 
+    scoreEl.innerText = score;
+    if (score > highScore) {
+        highScore = score;
+        highScoreEl.innerText = highScore;
+        localStorage.setItem('bunny_highScore', highScore);
+    }
+
+    const targetX = lanes[currentLane];
+    player.position.x += (targetX - player.position.x) * 0.2;
+    if (!isGrounded) {
+        playerVelocityY += hasCarrotPower ? 0 : gravity;
+        player.position.y += playerVelocityY;
+    }
+
+    wheels.forEach(wheel => {
+        wheel.rotation.x += gameSpeed * 1.5;
+    });
+    let onPlatform = false;
+    const playerZ = player.position.z;
+
+    roofs.forEach(roof => {
+        roof.mesh.position.z += gameSpeed;
+        
+        const zStart = roof.mesh.position.z + (roof.length / 2);
+        const zEnd = roof.mesh.position.z - (roof.length / 2);
+
+        if (roof.lane === currentLane && playerZ <= zStart && playerZ >= zEnd) {
+            if (player.position.y <= 0 && playerVelocityY <= 0) {
+                player.position.y = 0;
+                playerVelocityY = 0;
+                isGrounded = true;
+                jumpCount = 0; 
+                onPlatform = true;
+            }
+        }
+    });
+    if (!onPlatform) {
+        if (player.position.y <= 0) {
+            isGrounded = false;
+            playerVelocityY += hasCarrotPower ? 0 : gravity;
+            player.position.y += playerVelocityY;
+        }
+    }
+
+    // --- LOGÍSTICA DE MONEDAS (E IMÁN) ---
+    for (let i = coinsArray.length - 1; i >= 0; i--) {
+        const coin = coinsArray[i];
+        coin.position.z += gameSpeed; 
+        coin.rotation.y += 0.08;
+
+        // Atracción del imán hacia el centro del conejo (player.position.y + 0.6)
+        if (hasMagnetPower) {
+            const targetX = player.position.x;
+            const targetY = player.position.y + 0.6;
+            const targetZ = player.position.z;
+            
+            coin.position.x += (targetX - coin.position.x) * 0.18;
+            coin.position.y += (targetY - coin.position.y) * 0.18;
+            coin.position.z += (targetZ - coin.position.z) * 0.18;
+        }
+
+        const diffX = Math.abs(player.position.x - coin.position.x);
+        const diffY = Math.abs((player.position.y + 0.6) - coin.position.y);
+        const diffZ = Math.abs(player.position.z - coin.position.z);
+        
+        if (diffX < 1.0 && diffY < 1.0 && diffZ < 1.0) {
+            scene.remove(coin);
+            coinsArray.splice(i, 1);
+            coins += 10; 
+            coinsEl.innerText = coins;
+
+            playTone(1200, 'triangle', 0.06, 0.25);
+            setTimeout(() => {
+                if (!isGameOver) {
+                    playTone(1500, 'triangle', 0.08, 0.2); 
+                }
+            }, 50);
+            if (coins > highCoins) {
+                highCoins = coins;
+                highCoinsEl.innerText = highCoins;
+                localStorage.setItem('bunny_highCoins', highCoins);
+            }
+            continue;
+        }
+
+        if (coin.position.z > 25) {
+            scene.remove(coin);
+            coinsArray.splice(i, 1);
+        }
+    }
+
+    // --- LOGÍSTICA DE ZANAHORIAS ---
+    for (let i = carrotsArray.length - 1; i >= 0; i--) {
+        const carrot = carrotsArray[i];
+        carrot.position.z += gameSpeed;
+        carrot.rotation.y += 0.05; 
+
+        const diffX = Math.abs(player.position.x - carrot.position.x);
+        const diffY = Math.abs((player.position.y + 0.6) - carrot.position.y);
+        const diffZ = Math.abs(player.position.z - carrot.position.z);
+        if (diffX < 1.2 && diffY < 1.2 && diffZ < 1.2) {
+            scene.remove(carrot);
+            carrotsArray.splice(i, 1);
+
+            hasCarrotPower = true;
+            carrotPowerTimeLeft = 4.0; 
+            gameSpeed = defaultSpeed * 2.2;
+            playerVelocityY = 0.1;
+            isGrounded = false;
+            carrotTimerEl.style.display = 'block';
+
+            playTone(880, 'sine', 0.1, 0.3);
+            setTimeout(() => playTone(1318, 'sine', 0.15, 0.3), 80);
+            setTimeout(() => playTone(1760, 'sine', 0.25, 0.3), 160);
+            continue;
+        }
+
+        if (carrot.position.z > 25) {
+            scene.remove(carrot);
+            carrotsArray.splice(i, 1);
+        }
+    }
+
+    // --- LOGÍSTICA DE IMANES ---
+    for (let i = magnetsArray.length - 1; i >= 0; i--) {
+        const magnet = magnetsArray[i];
+        magnet.position.z += gameSpeed;
+        magnet.rotation.y += 0.04;
+        
+        const diffX = Math.abs(player.position.x - magnet.position.x);
+        const diffY = Math.abs((player.position.y + 0.6) - magnet.position.y);
+        const diffZ = Math.abs(player.position.z - magnet.position.z);
+        
+        if (diffX < 1.2 && diffY < 1.2 && diffZ < 1.2) {
+            scene.remove(magnet);
+            magnetsArray.splice(i, 1);
+            
+            hasMagnetPower = true;
+            magnetPowerTimeLeft = 4.0;
+            magnetTimerEl.style.display = 'block';
+            
+            // Sonido futurista de imán
+            playTone(440, 'sine', 0.1, 0.3);
+            setTimeout(() => playTone(660, 'sine', 0.12, 0.3), 70);
+            setTimeout(() => playTone(990, 'sine', 0.20, 0.3), 140);
+            continue;
+        }
+        
+        if (magnet.position.z > 25) {
+            scene.remove(magnet);
+            magnetsArray.splice(i, 1);
+        }
+    }
+
+    if (player.position.y < -6) {
+        if (hasCarrotPower) {
+            player.position.y = 3.0;
+            playerVelocityY = 0;
+        } else {
+            endGame();
+        }
+    }
+
+    roofs.forEach((roof, index) => {
+        if (roof.mesh.position.z > 25) {
+            scene.remove(roof.mesh);
+            
+            const randomLength = Math.random() * 25 + 25; 
+            const gapSelector = Math.random();
+            let gap;
+     
+            if (gapSelector < 0.4) {
+                gap = Math.random() * 3 + 4;   
+            } else if (gapSelector < 0.75) {
+                gap = Math.random() * 4 + 9;   
+            } else {
+                gap = Math.random() * 5 + 16;  
+            }
+            
+            const laneRoofs = roofs.filter(r => r.lane === roof.lane);
+            let minZ = -20;
+    
+            laneRoofs.forEach(r => {
+                const frontZ = r.mesh.position.z - (r.length / 2);
+                if (frontZ < minZ) {
+                    minZ = frontZ;
+                }
+            });
+ 
+            const newZPos = minZ - gap - (randomLength / 2);
+            roofs[index] = createRoof(roof.lane, newZPos, randomLength);
+            spawnCoinsOnRoof(roof.lane, newZPos, randomLength);
+        }
+    });
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+    update();
+    renderer.render(scene, camera);
+}
+
+function endGame() {
+    isGameOver = true;
+    gameOverScreen.style.display = 'flex';
+    carrotTimerEl.style.display = 'none';
+    magnetTimerEl.style.display = 'none';
+    playTone(150, 'sawtooth', 0.6, 0.2);
+}
+
+function resetGame() {
+    score = 0;
+    coins = 0;
+    currentLane = 1;
+    playerVelocityY = 0;
+    isGrounded = true;
+    jumpCount = 0;
+    hasCarrotPower = false;
+    hasMagnetPower = false;
+    defaultSpeed = initialSpeed;
+    gameSpeed = defaultSpeed;
+    carrotTimerEl.style.display = 'none';
+    magnetTimerEl.style.display = 'none';
+    player.position.set(lanes[currentLane], 0, 0);
+    scoreEl.innerText = score;
+    coinsEl.innerText = coins;
+    gameOverScreen.style.display = 'none';
+    initRoofs();
+    isGameOver = false;
+}
+
+function handleMouseClick(e) {
+    if (isGameOver) return;
+    if (e.target.id === 'btnRetry') return;
+    executeJump();
+}
+
+function handleTouchStart(e) {
+    if (isGameOver) return;
+    if (e.target.id === 'btnRetry') return;
+    e.preventDefault();
+    initAudio();
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+}
+
+function handleTouchEnd(e) {
+    if (isGameOver) return;
+    if (e.target.id === 'btnRetry') return;
+    e.preventDefault();
+    let touchEndX = e.changedTouches[0].clientX;
+    let touchEndY = e.changedTouches[0].clientY;
+    let diffX = touchEndX - touchStartX;
+    let diffY = touchEndY - touchStartY;
+    if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > minSwipeDistance) {
+        if (diffX > 0 && currentLane < 2) {
+            currentLane++;
+        } else if (diffX < 0 && currentLane > 0) {
+            currentLane--;
+        }
+    } else if (Math.abs(diffY) < minSwipeDistance && Math.abs(diffX) < minSwipeDistance) {
+        executeJump();
+    }
+}
+
+function onWindowResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+init();
+</script>
+</body>
+</html>
